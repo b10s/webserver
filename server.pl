@@ -76,8 +76,8 @@ while( 1 ) {
 
 	next if $done;
 	#print "going to sleep\n";
-	select();
-	Time::HiRes::usleep(50);
+	#select();
+	Time::HiRes::usleep(500);
 }
 
 close($server);
