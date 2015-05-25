@@ -1,9 +1,12 @@
 use warnings;
 use strict;
 use Socket;
-use Time::HiRes;
+use Time::HiRes qw(setitimer getitimer usleep ITIMER_REAL);
 
 use Data::Dumper;
+
+$SIG{ALRM} = sub { };
+$|++;
 
 socket( my $server, PF_INET, SOCK_STREAM, (getprotobyname('tcp'))[2] );
 setsockopt($server, SOL_SOCKET, SO_REUSEADDR, 1);
@@ -16,13 +19,12 @@ bind($server, $own_addr) or die "cant bind\n";
 listen($server, SOMAXCONN);
 
 my %clients;
-#my $read_timeout = 1;
-
 
 while( 1 ) {
 	#print "iteration\n";
 	my $done = 0;
-	# за один проход цикла мы можем принять один коннект и положить его в список коннектов, предварительно сделав сокет клиента неблокирующим
+	# за один проход цикла мы можем принять один коннект и положить его в список коннектов, 
+	# предварительно сделав сокет клиента неблокирующим
 	if( accept(my $client_conn, $server) ) {
 		$client_conn->blocking(0);
 		$client_conn->autoflush(1);
@@ -42,33 +44,24 @@ while( 1 ) {
 	for my $client_name ( keys %clients ) {
 		#print "let's check $client_name\n";
 		my $client = $clients{$client_name};
-		my $buf;
-		my $read_res = sysread($client, $buf, 1024);
-		# клиент на связи но молчит :)
-		next if not defined $read_res;
 
-		# клиент отпал
-		if( $read_res==0 ) {
-			print "$client_name leaves us\n";
-			delete $clients{$client_name};
-		}
+		my $message = read_data($client);
 
-		# началось чтение
-		if ( $read_res ) {
-			my $message.= $buf;
-			my $read_starts = time;
-			# читаем пока читается или пока не вышел таймаут
-			until ( $buf ) {
-				$message.= $buf if sysread($client, $buf, 1024);
+		if( exists $message->{err} ) {
+
+			if( $message->{err}==-1 ) {
+				print "$client_name leaves us\n";
+				close $client;
+				delete $clients{$client_name};
+				next;
+			} elsif ( $message->{err}==1 ) {
+				print "$client_name reading timeout\n";
+				next;
 			}
-
-			process($client, $message);
-			close $client;
-			delete $clients{$client_name};
-			#shutdown($client, 0);
-			#print "$client_name leaves us\n";
-
-			$done++;
+			
+		} else {
+			process($client, $message->{msg});
+			$done ++;
 		}
 
 	}
@@ -76,20 +69,40 @@ while( 1 ) {
 
 	next if $done;
 	#print "going to sleep\n";
-	#select();
-	Time::HiRes::usleep(500);
+	usleep(500);
 }
 
 close($server);
 
 
-sub process {
+sub read_data {
 	my $client = shift;
-	my $message = shift;
+	my ($buf, $read_res, $message, $timer);
+
+	# ставим таймер в пол секунды
+	setitimer(ITIMER_REAL, 0.5);
+	while( $read_res = sysread($client, $buf, 1024) and  $timer=getitimer(ITIMER_REAL) ) {
+		
+		$message.= $buf;
+	}
+
+	# ошибка чтения, считаем, что клиент отвалился
+	return { 'err'=>-1 } if not defined $read_res and not defined $message;
+	
+	# если кончилось время
+	return { 'err'=>1 } if not $timer;
+	
+	return { 'msg'=>$message };
+}
+
+sub process {
+	my ( $client, $message, $route ) = @_;
+	#print $route, "\n";
 	my %router = (
 		"ip" => sub { return 1212121; },
 		"test" => sub { return 'test'; },
 	);
+
 
 	my ( $headers ) = split("\r\n\r\n", $message, 2);
 	my ( $get ) = split("\r\n", $headers, 2);
