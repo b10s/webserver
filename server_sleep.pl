@@ -1,11 +1,13 @@
 use warnings;
 use strict;
-use Socket;
+use Socket qw(:DEFAULT :crlf);
 use Time::HiRes qw(setitimer getitimer usleep ITIMER_REAL);
 
 use Data::Dumper;
 
 my %clients;
+
+
 $SIG{ALRM} = sub { };
 $|++;
 
@@ -27,6 +29,26 @@ $rbits = $server_bit_mask;
 
 while( 1 ) {
 	my $done = 0;
+	# my ($nfound, $timeleft) = select($rout=$rbits, undef, undef, 0.5);
+
+	#print unpack("b*", $rout), "\n";
+	#print unpack("b*", $rbits), "\n";
+	#print "select, nfound: $nfound, timeleft: $timeleft, rout: $rout, rbits: $rbits \n";
+	#print $!,"\n" if $nfound == -1;
+	#print "iteration\n";
+	#if($nfound) {
+	#	print unpack("b*", $rout), "\n";
+	#	print unpack("b*", $server_bit_mask), "\n";
+	#	print unpack("b*", $rout & $server_bit_mask), "\n";
+	#}
+	
+
+	#if ( defined $rout && $server_bit_mask & $rout ) {
+	#	print "server socket ready for read!\n";
+	#}
+
+	# in one iteration we can get one connection from client and put it to pool of connections
+	# but before set socket as not blocked
 
 	if( accept(my $client_conn, $server) ) {
 		$client_conn->blocking(0);
@@ -38,27 +60,24 @@ while( 1 ) {
 		my $claimed_hostname = gethostbyaddr($iaddr, AF_INET);
 
 		print "got new connection from $actual_ip : $port\n";
-		$clients{"$claimed_hostname:$port"} = $client_conn;
+		$clients{"$claimed_hostname:$port"}{handler} = $client_conn;
 
 		$done++;
 	}
 
 	for my $client_name ( keys %clients ) {
 		print "let's check $client_name\n";
-		my $client = $clients{$client_name};
+		my $client = $clients{$client_name}{handler};
 
-		my $message = read_data($client);
+		my $message = read_data($client, $clients{$client_name}{data} );
 		#print "client told: $message->{msg}\n";
 		if( exists $message->{err} ) {
 
 			if( $message->{err}==-1 ) {
-				# todo: in case client say it again we should close connection
 				print "$client_name say nothing \n";
-				#close $client;
-				#delete $clients{$client_name};
+				# todo: in case client say it again we should close connection
 
 				# check next client
-				next;
 			} elsif ( $message->{err}==1 ) {
 				print "hope dont get there until can detect end of message \n";
 				#print "$client_name reading timeout\n";
@@ -67,12 +86,21 @@ while( 1 ) {
 				#delete $clients{$client_name};
 
 				# check next client
-				next;
+			} elsif ( $message->{err}==0 ) {
+				$clients{$client_name}{data}.=$message;
 			}
-			
+
+			$clients{$client_name}{attempt_to_read}++;
+			if( $clients{$client_name}{attempt_to_read} > 5 ) {
+					print "$client_name timeouted \n";
+					close $client;
+					delete $clients{$client_name};
+			}
+			next;
 		} else {
 			# todo: need to make process procedure more safe to process some rubbish in message
 			process($client, $message->{msg});
+			print "$client_name get answer and will be closed \n";
 			# maybe i dont need to close connection
 			close $client;
 			delete $clients{$client_name};
@@ -92,11 +120,11 @@ close($server);
 
 
 sub read_data {
-	my $client = shift;
-	my ($buf, $read_res, $message, $timer);
+	my ( $client, $message) = @_;
+	my ($buf, $read_res, $timer);
 
 	# set timer for read browser data
-	setitimer(ITIMER_REAL, 0.005);
+	setitimer(ITIMER_REAL, 0.05);
 	while( ($read_res=sysread($client, $buf, 1024)) || ($timer=getitimer(ITIMER_REAL)) ) {
 		$message.= $buf if $read_res;
 		# todo: must detect end of message before time out, now i cant :( and hope browser send me all in short time
@@ -108,6 +136,10 @@ sub read_data {
 	# nothing get from client in while
 	return { 'err'=>-1 } if not defined $message and ( not defined $read_res or $read_res == 0 );
 
+	# we got some data from client but incomplite for GET request
+	if ( $message!~/$CRLF$/ ) {
+		return { err=>0, msg=>$message };
+	}
 	#print "we readed: read_res: $read_res, message: $message\n";
 	
 	# timer is out, but client still put data
@@ -119,7 +151,7 @@ sub read_data {
 
 sub process {
 	my ( $client, $message ) = @_;
-	#print $route, "\n";
+
 	my %router = (
 		"ip" => sub { return 1212121; },
 		"test" => sub { return 'test'; },
@@ -138,6 +170,8 @@ sub process {
 		# process known GET query
 		if( exists $router{$query_string} ) {
 			$content = &{$router{$query_string}};
+			#print $content, "\n";
+			#exit;
 			answer($client, $content, 200);
 		# process 404 for unknown GET query
 		} else {
@@ -154,5 +188,5 @@ sub answer {
 	my( $client, $content, $status ) = @_;
 	my $content_length = length $content;
 
-	$client->print("HTTP/1.1 $status\r\nServer: b10s\r\nConnection: close\r\nContent-Type: text/html\r\nContent-Length: $content_length\r\n\r\n$content");
+	$client->print("HTTP/1.1 $status\r\nServer: b10s\r\nConnection: close\r\nContent-Type: text/html\r\nContent-Length: ${content_length}\r\n\r\n${content}");
 }
