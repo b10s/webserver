@@ -63,6 +63,7 @@ while( 1 ) {
 		$clients{"$claimed_hostname:$port"}{handler} = $client_conn;
 
 		$done++;
+		#next;
 	}
 
 	for my $client_name ( keys %clients ) {
@@ -112,7 +113,7 @@ while( 1 ) {
 
 	# dont need to sleed if we done some work before
 	next if $done;
-
+	#print "going to sleep \n";
 	usleep(500);
 }
 
@@ -121,12 +122,13 @@ close($server);
 
 sub read_data {
 	my ( $client, $message) = @_;
-	my ($buf, $read_res, $timer);
+	my ($buf, $read_res, $timer, $f);
 
 	# set timer for read browser data
-	setitimer(ITIMER_REAL, 0.05);
+	setitimer(ITIMER_REAL, 0.005);
 	while( ($read_res=sysread($client, $buf, 1024)) || ($timer=getitimer(ITIMER_REAL)) ) {
 		$message.= $buf if $read_res;
+		$f++, last if $message=~/$CRLF$/;
 		# todo: must detect end of message before time out, now i cant :( and hope browser send me all in short time
 	}
 
@@ -137,7 +139,7 @@ sub read_data {
 	return { 'err'=>-1 } if not defined $message and ( not defined $read_res or $read_res == 0 );
 
 	# we got some data from client but incomplite for GET request
-	if ( $message!~/$CRLF$/ ) {
+	if ( !$f ) {
 		return { err=>0, msg=>$message };
 	}
 	#print "we readed: read_res: $read_res, message: $message\n";
