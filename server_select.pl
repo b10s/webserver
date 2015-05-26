@@ -45,6 +45,8 @@ while( 1 ) {
 
 			print "\tgot new connection from $actual_ip : $port\n";
 			$clients{"$claimed_hostname:$port"}{handler} = $client_conn;
+			vec($clients{"$claimed_hostname:$port"}{bitmask}, fileno( $client_conn ), 1) = 1;
+			$clients{"$claimed_hostname:$port"}{birhday} = time;
 
 			vec($rbits, fileno($client_conn), 1) = 1;
 
@@ -56,11 +58,22 @@ while( 1 ) {
 	# in one iteration we can get one connection from client and put it to pool of connections
 	# but before set socket as not blocked
 
-
-	#if()
 	for my $client_name ( keys %clients ) {
 		print "let's check $client_name\n";
 		my $client = $clients{$client_name}{handler};
+		# if clients socket not ready for be readed
+		if( not $clients{$client_name}{bitmask} & $rout ) {
+			# if client socket for 4+ seconds keep silent we close it
+			if( time - $clients{$client_name}{birhday} > 4 ) {
+				print "$client_name timeouted \n";
+				vec($rbits, fileno($client), 1) = 0;
+				close $client;
+				delete $clients{$client_name};
+			}
+			next;
+		}
+
+		
 
 		my $message = read_data($client, $clients{$client_name}{data} );
 		#print "client told: $message->{msg}\n";
