@@ -28,7 +28,6 @@ vec($server_bit_mask, fileno($server), 1) = 1;
 $rbits = $server_bit_mask;
 
 while( 1 ) {
-	my $done = 0;
 	# wait until data from client is ready
 	my ($nfound, $timeleft) = select($rout=$rbits, undef, undef, undef);
 
@@ -49,14 +48,8 @@ while( 1 ) {
 			$clients{"$claimed_hostname:$port"}{birhday} = time;
 
 			vec($rbits, fileno($client_conn), 1) = 1;
-
-			$done++;
-			#next;
 		}
 	}
-
-	# in one iteration we can get one connection from client and put it to pool of connections
-	# but before set socket as not blocked
 
 	for my $client_name ( keys %clients ) {
 		print "let's check $client_name\n";
@@ -73,16 +66,13 @@ while( 1 ) {
 			next;
 		}
 
-		
-
 		my $message = read_data($client, $clients{$client_name}{data} );
-		#print "client told: $message->{msg}\n";
+
 		if( exists $message->{err} ) {
 
 			if( $message->{err}==-1 ) {
 				print "$client_name say nothing \n";
 				# todo: in case client say it again we should close connection
-
 				# check next client
 			} elsif ( $message->{err}==1 ) {
 				print "hope dont get there until can detect end of message \n";
@@ -112,16 +102,9 @@ while( 1 ) {
 			vec($rbits, fileno($client), 1) = 0;
 			close $client;
 			delete $clients{$client_name};
-			$done ++;
 		}
 
 	}
-	
-
-	# dont need to sleed if we done some work before
-	next if $done;
-	#print "going to sleep \n";
-	#usleep(500);
 }
 
 close($server);
